@@ -1,7 +1,7 @@
 {
-  "name": "claude-university",
-  "version": "1.0.0",
-  "description": "Claude University - Interactive Study Dashboard",
+  "name": "planetcorps-ai-academy",
+  "version": "2.0.0",
+  "description": "PlanetCorps AI Academy - Multi-program learning platform",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",

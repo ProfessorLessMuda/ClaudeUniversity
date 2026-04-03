@@ -32,7 +32,7 @@ async function api(path, options = {}) {
   return res.json();
 }
 
-// --------------- Domain metadata ---------------
+// --------------- Domain metadata (fallbacks) ---------------
 
 const DOMAIN_COLORS = {
   1: '#4a7c59',
@@ -49,6 +49,19 @@ const DOMAIN_NAMES = {
   4: 'Prompt Engineering',
   5: 'Context & Reliability'
 };
+
+function getDomainColor(num) {
+  return currentProgramManifest?.domainColors?.[num] || DOMAIN_COLORS[num] || '#888';
+}
+
+function getDomainName(num) {
+  return currentProgramManifest?.domains?.[num]?.name || DOMAIN_NAMES[num] || `Domain ${num}`;
+}
+
+// --------------- Program state ---------------
+
+let currentProgramId = null;       // null = Academy level, string = inside a program
+let currentProgramManifest = null;  // The program.json data for current program
 
 // --------------- SVG Progress Ring ---------------
 
@@ -106,9 +119,22 @@ function hideModal() {
   }
 }
 
+// --------------- Breadcrumb ---------------
+
+function updateBreadcrumb() {
+  const bc = document.getElementById('breadcrumb');
+  if (!bc) return;
+  if (!currentProgramId) {
+    bc.innerHTML = '';
+    return;
+  }
+  const name = currentProgramManifest?.shortName || currentProgramId;
+  bc.innerHTML = `<a href="#" onclick="exitProgram();return false" style="color:var(--primary)">Academy</a> <span style="color:var(--muted);margin:0 6px">\u203a</span> <span style="font-weight:600">${esc(name)}</span>`;
+}
+
 // --------------- View Switching ---------------
 
-let currentView = 'dashboard';
+let currentView = 'academy';
 
 function switchView(name) {
   document.querySelectorAll('.view').forEach(v => v.classList.remove('active'));
@@ -116,11 +142,13 @@ function switchView(name) {
   const viewEl = document.getElementById(`view-${name}`);
   if (viewEl) viewEl.classList.add('active');
   currentView = name;
+  updateBreadcrumb();
   loadView(name);
 }
 
 function loadView(name) {
   switch (name) {
+    case 'academy': loadAcademy(); break;
     case 'dashboard': loadDashboard(); break;
     case 'programs': loadPrograms(); break;
     case 'curriculum': loadCurriculum(); break;
@@ -128,6 +156,109 @@ function loadView(name) {
     case 'glossary': loadGlossary(); break;
     case 'study-plan': loadStudyPlan(); break;
     case 'exercises': loadExercises(); break;
+  }
+}
+
+// --------------- Enter / Exit Program ---------------
+
+async function enterProgram(programId) {
+  currentProgramId = programId;
+  try {
+    const programs = await api('/api/academy/programs');
+    currentProgramManifest = programs.find(p => p.id === programId) || null;
+  } catch {
+    currentProgramManifest = null;
+  }
+  const tabs = document.getElementById('program-tabs');
+  if (tabs) tabs.style.display = '';
+  updateBreadcrumb();
+  switchView('dashboard');
+}
+
+function exitProgram() {
+  currentProgramId = null;
+  currentProgramManifest = null;
+  const tabs = document.getElementById('program-tabs');
+  if (tabs) tabs.style.display = 'none';
+  updateBreadcrumb();
+  switchView('academy');
+}
+
+// ===============================================================
+//  ACADEMY (landing page)
+// ===============================================================
+
+async function loadAcademy() {
+  const el = document.getElementById('view-academy');
+  if (!el) return;
+  el.innerHTML = '<p class="text-muted text-center">Loading Academy...</p>';
+  try {
+    // Fetch all available programs AND user enrollment
+    const [allPrograms, enrollments] = await Promise.all([
+      api('/api/academy/programs'),
+      api('/api/academy/enrollment')
+    ]);
+
+    // Build enrollment lookup
+    const enrolledIds = new Set((enrollments || []).map(e => e.programId));
+    const enrollmentMap = {};
+    (enrollments || []).forEach(e => { enrollmentMap[e.programId] = e; });
+
+    let html = '<h2 class="mb-20">Academy</h2>';
+    html += '<p class="text-muted" style="margin-bottom:24px">Select a certification program to begin studying.</p>';
+
+    html += '<div class="card-grid">';
+    (allPrograms || []).forEach(p => {
+      const color = p.color || '#4a7c59';
+      const icon = p.icon || '\ud83c\udf93';
+      const enrolled = enrolledIds.has(p.id);
+      const enrollment = enrollmentMap[p.id];
+      const pct = enrolled && enrollment?.progressSummary
+        ? Math.round(enrollment.progressSummary.overallMastery || 0) : 0;
+
+      html += `<div class="card" style="border-top:4px solid ${esc(color)}">
+        <div style="display:flex;align-items:flex-start;gap:16px;margin-bottom:12px">
+          <div style="font-size:2rem;line-height:1">${icon}</div>
+          <div style="flex:1">
+            <h3 style="margin-bottom:4px">${esc(p.name)}</h3>
+            <p class="text-muted" style="font-size:0.85rem">${esc(p.description || '')}</p>
+          </div>
+          <div style="flex-shrink:0">
+            ${progressRing(pct, color, 70, 5)}
+          </div>
+        </div>
+        <div class="text-muted text-sm" style="margin-bottom:12px">${p.moduleCount || 0} modules &middot; ${p.domainCount || 0} domains</div>`;
+
+      if (enrolled) {
+        html += `<button class="btn-primary enter-program-btn" data-id="${esc(String(p.id))}" style="width:100%">Enter Program</button>`;
+      } else {
+        html += `<button class="btn-secondary enroll-program-btn" data-id="${esc(String(p.id))}" style="width:100%;border-color:${esc(color)};color:${esc(color)}">Enroll</button>`;
+      }
+
+      html += '</div>';
+    });
+    html += '</div>';
+
+    el.innerHTML = html;
+
+    // Enter program buttons
+    el.querySelectorAll('.enter-program-btn').forEach(btn => {
+      btn.addEventListener('click', () => enterProgram(btn.dataset.id));
+    });
+
+    // Enroll buttons
+    el.querySelectorAll('.enroll-program-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        try {
+          await api(`/api/academy/enroll/${btn.dataset.id}`, { method: 'POST' });
+          loadAcademy();
+        } catch (err) {
+          alert('Enrollment failed: ' + err.message);
+        }
+      });
+    });
+  } catch (err) {
+    el.innerHTML = `<p style="color:#e05260">Error loading Academy: ${esc(err.message)}</p>`;
   }
 }
 
@@ -139,7 +270,7 @@ async function loadDashboard() {
   const el = document.getElementById('view-dashboard');
   el.innerHTML = '<p class="text-muted text-center">Loading dashboard...</p>';
   try {
-    const d = await api('/api/dashboard');
+    const d = await api(`/api/programs/${currentProgramId}/dashboard`);
 
     const modulesRead = d.domainMastery
       ? d.domainMastery.reduce((s, dm) => s + (dm.modulesRead || 0), 0)
@@ -170,8 +301,8 @@ async function loadDashboard() {
     if (d.domainMastery && d.domainMastery.length) {
       d.domainMastery.forEach(dm => {
         const num = dm.domain || dm.domainNum || 0;
-        const color = DOMAIN_COLORS[num] || '#888';
-        const name = DOMAIN_NAMES[num] || `Domain ${num}`;
+        const color = getDomainColor(num);
+        const name = getDomainName(num);
         const pct = Math.round(dm.mastery || dm.percentage || 0);
         html += `<div class="domain-card text-center">
           ${progressRing(pct, color)}
@@ -181,8 +312,8 @@ async function loadDashboard() {
     } else {
       for (let i = 1; i <= 5; i++) {
         html += `<div class="domain-card text-center">
-          ${progressRing(0, DOMAIN_COLORS[i])}
-          <div style="margin-top:8px;font-weight:600;font-size:0.85rem">${esc(DOMAIN_NAMES[i])}</div>
+          ${progressRing(0, getDomainColor(i))}
+          <div style="margin-top:8px;font-weight:600;font-size:0.85rem">${esc(getDomainName(i))}</div>
         </div>`;
       }
     }
@@ -245,7 +376,7 @@ async function loadPrograms() {
   const el = document.getElementById('view-programs');
   el.innerHTML = '<p class="text-muted text-center">Loading programs...</p>';
   try {
-    const programs = await api('/api/programs');
+    const programs = await api(`/api/programs/${currentProgramId}/programs`);
 
     let html = '<div class="flex gap-12 mb-20" style="justify-content:space-between;align-items:center">';
     html += '<h2>Study Programs</h2>';
@@ -297,7 +428,7 @@ async function loadPrograms() {
         const name = document.getElementById('prog-name').value.trim();
         const description = document.getElementById('prog-desc').value.trim();
         if (!name) return;
-        await api('/api/programs', { method: 'POST', body: { name, description } });
+        await api(`/api/programs/${currentProgramId}/programs`, { method: 'POST', body: { name, description } });
         hideModal();
         loadPrograms();
       });
@@ -320,7 +451,7 @@ async function loadPrograms() {
           const title = document.getElementById('mod-title').value.trim();
           const content = document.getElementById('mod-content').value.trim();
           if (!title) return;
-          await api(`/api/programs/${id}/modules`, { method: 'POST', body: { title, content } });
+          await api(`/api/programs/${currentProgramId}/programs/${id}/modules`, { method: 'POST', body: { title, content } });
           hideModal();
           loadPrograms();
         });
@@ -331,7 +462,7 @@ async function loadPrograms() {
     el.querySelectorAll('.delete-program-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
         if (!confirm('Delete this program?')) return;
-        await api(`/api/programs/${btn.dataset.id}`, { method: 'DELETE' });
+        await api(`/api/programs/${currentProgramId}/programs/${btn.dataset.id}`, { method: 'DELETE' });
         loadPrograms();
       });
     });
@@ -360,13 +491,13 @@ async function loadCurriculumList() {
   const el = document.getElementById('view-curriculum');
   el.innerHTML = '<p class="text-muted text-center">Loading curriculum...</p>';
   try {
-    const modules = await api('/api/curriculum');
+    const modules = await api(`/api/programs/${currentProgramId}/curriculum`);
 
     let html = '<h2 class="mb-20">Curriculum Modules</h2><div class="card-grid">';
     modules.forEach(m => {
       const pct = m.progress ? Math.round(m.progress.percentComplete || 0) : 0;
       const domainNum = m.domain || 0;
-      const color = DOMAIN_COLORS[domainNum] || '#888';
+      const color = getDomainColor(domainNum);
       html += `<div class="card">
         <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:8px">
           <h3 style="flex:1">${esc(m.title)}</h3>
@@ -402,7 +533,7 @@ async function loadCurriculumReader(moduleId) {
   const el = document.getElementById('view-curriculum');
   el.innerHTML = '<p class="text-muted text-center">Loading module...</p>';
   try {
-    const m = await api(`/api/curriculum/${moduleId}`);
+    const m = await api(`/api/programs/${currentProgramId}/curriculum/${moduleId}`);
     const completed = m.progress && m.progress.sectionsCompleted ? m.progress.sectionsCompleted : [];
 
     // Build TOC
@@ -504,7 +635,7 @@ async function loadCurriculumReader(moduleId) {
     el.querySelectorAll('.section-checkbox').forEach(cb => {
       cb.addEventListener('change', async () => {
         const sectionId = cb.dataset.section;
-        await api(`/api/curriculum/${moduleId}/progress`, {
+        await api(`/api/programs/${currentProgramId}/curriculum/${moduleId}/progress`, {
           method: 'PUT',
           body: { sectionId, completed: cb.checked }
         });
@@ -537,7 +668,7 @@ async function loadAssessmentHub() {
   const el = document.getElementById('view-assessments');
   el.innerHTML = '<p class="text-muted text-center">Loading assessments...</p>';
   try {
-    const domains = await api('/api/assessments/domains');
+    const domains = await api(`/api/programs/${currentProgramId}/assessments/domains`);
 
     let html = '<h2 class="mb-20">Assessment Hub</h2>';
 
@@ -545,8 +676,8 @@ async function loadAssessmentHub() {
     html += '<div class="card-grid">';
     domains.forEach(d => {
       const num = d.domain;
-      const color = DOMAIN_COLORS[num] || '#888';
-      const name = d.name || DOMAIN_NAMES[num] || `Domain ${num}`;
+      const color = getDomainColor(num);
+      const name = d.name || getDomainName(num);
       const lastStr = d.lastScore != null ? `Last: ${d.lastScore}%` : 'Not attempted';
       html += `<div class="card">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
@@ -598,7 +729,7 @@ async function startDomainQuiz(domainNum) {
   const el = document.getElementById('view-assessments');
   el.innerHTML = '<p class="text-muted text-center">Loading questions...</p>';
   try {
-    const data = await api(`/api/assessments/domain/${domainNum}`);
+    const data = await api(`/api/programs/${currentProgramId}/assessments/domain/${domainNum}`);
     quizState = {
       type: 'domain',
       domain: domainNum,
@@ -619,7 +750,7 @@ async function startExamSimulation() {
   const el = document.getElementById('view-assessments');
   el.innerHTML = '<p class="text-muted text-center">Loading exam simulation...</p>';
   try {
-    const scenarios = await api('/api/assessments/exam-simulation');
+    const scenarios = await api(`/api/programs/${currentProgramId}/assessments/exam-simulation`);
     // Flatten scenario questions
     const questions = [];
     const scenarioNums = [];
@@ -760,7 +891,7 @@ async function submitQuiz() {
       answers: quizState.answers,
       timeSpentSeconds: timeSpent
     };
-    const result = await api('/api/assessments/submit', { method: 'POST', body });
+    const result = await api(`/api/programs/${currentProgramId}/assessments/submit`, { method: 'POST', body });
     quizState.results = result;
     assessmentState = 'results';
     renderQuizResults();
@@ -851,7 +982,7 @@ async function showQuizHistory() {
   const el = document.getElementById('view-assessments');
   el.innerHTML = '<p class="text-muted text-center">Loading quiz history...</p>';
   try {
-    const history = await api('/api/quiz-history');
+    const history = await api(`/api/programs/${currentProgramId}/quiz-history`);
 
     let html = '<div style="margin-bottom:16px"><button class="btn-secondary" id="history-back">&larr; Back to Hub</button></div>';
     html += '<h2 class="mb-20">Quiz History</h2>';
@@ -866,7 +997,7 @@ async function showQuizHistory() {
         html += `<tr style="border-top:1px solid rgba(0,0,0,0.06)">
           <td style="padding:8px">${esc(formatDate(q.date))}</td>
           <td style="padding:8px">${esc(q.type || '')}</td>
-          <td style="padding:8px">${q.domain ? DOMAIN_NAMES[q.domain] || `Domain ${q.domain}` : 'Mixed'}</td>
+          <td style="padding:8px">${q.domain ? getDomainName(q.domain) : 'Mixed'}</td>
           <td style="padding:8px">${q.score}/${q.total}</td>
           <td style="padding:8px;color:${pct >= 70 ? '#4a7c59' : '#e05260'}">${pct}%</td>
         </tr>`;
@@ -896,7 +1027,7 @@ async function loadGlossary() {
   const el = document.getElementById('view-glossary');
   el.innerHTML = '<p class="text-muted text-center">Loading glossary...</p>';
   try {
-    glossaryData = await api('/api/glossary');
+    glossaryData = await api(`/api/programs/${currentProgramId}/glossary`);
     glossarySearch = '';
     glossaryDomainFilter = null;
     renderGlossary();
@@ -948,7 +1079,7 @@ function renderGlossary() {
     if (g.domains && g.domains.length) {
       html += '<div style="margin-top:8px">';
       g.domains.forEach(d => {
-        const color = DOMAIN_COLORS[d] || '#888';
+        const color = getDomainColor(d);
         html += `<span class="domain-pill" style="background:${color};color:#000;padding:2px 8px;border-radius:12px;font-size:0.7rem;font-weight:700;margin-right:4px">D${d}</span>`;
       });
       html += '</div>';
@@ -1022,48 +1153,96 @@ async function loadStudyPlan() {
   const el = document.getElementById('view-study-plan');
   el.innerHTML = '<p class="text-muted text-center">Loading study plan...</p>';
   try {
-    const plan = await api('/api/study-plan');
+    const plan = await api(`/api/programs/${currentProgramId}/study-plan`);
     const currentPhase = plan.currentPhase || 1;
     const checkpoints = plan.checkpoints || {};
 
+    // Determine phase structure: prefer manifest, fall back to server/hardcoded
+    const manifestPhases = currentProgramManifest?.studyPlan?.phases || null;
+
     let html = '<h2 class="mb-20">Study Plan</h2>';
 
-    for (let phase = 1; phase <= 4; phase++) {
-      const meta = PHASE_META[phase];
-      const phaseKey = `phase-${phase}`;
-      const phaseData = checkpoints[phaseKey] || { items: [], completed: [] };
-      const items = phaseData.items || [];
-      const completed = phaseData.completed || [];
-      const isCurrent = phase === currentPhase;
+    if (manifestPhases && manifestPhases.length) {
+      // Use manifest-defined phase structure
+      manifestPhases.forEach((phase, idx) => {
+        const phaseNum = phase.num || (idx + 1);
+        const phaseKey = phase.key || `phase-${phaseNum}`;
+        const phaseData = checkpoints[phaseKey] || { items: [], completed: [] };
+        const items = phase.items || phaseData.items || [];
+        const completed = phaseData.completed || [];
+        const isCurrent = phaseNum === currentPhase;
 
-      const completedCount = completed.length;
-      const totalCount = items.length;
+        const completedCount = completed.length;
+        const totalCount = items.length;
 
-      html += `<div class="phase-card${isCurrent ? ' current' : ''}" style="margin-bottom:20px">
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
-          <span class="phase-num">${phase}</span>
-          <div>
-            <div class="phase-title">${esc(meta.title)}</div>
-            <div class="text-muted" style="font-size:0.85rem">${esc(meta.goal)}</div>
-          </div>
-          <span class="text-muted" style="margin-left:auto;font-size:0.85rem">${completedCount}/${totalCount}</span>
-        </div>`;
+        html += `<div class="phase-card${isCurrent ? ' current' : ''}" style="margin-bottom:20px">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+            <span class="phase-num">${phaseNum}</span>
+            <div>
+              <div class="phase-title">${esc(phase.title || `Phase ${phaseNum}`)}</div>
+              <div class="text-muted" style="font-size:0.85rem">${esc(phase.goal || '')}</div>
+            </div>
+            <span class="text-muted" style="margin-left:auto;font-size:0.85rem">${completedCount}/${totalCount}</span>
+          </div>`;
 
-      if (items.length) {
-        html += '<div style="margin-top:12px">';
-        items.forEach(itemId => {
-          const isChecked = completed.includes(itemId);
-          const label = ITEM_LABELS[itemId] || itemId;
-          html += `<label class="checkpoint-item flex gap-12" style="align-items:center;padding:6px 0;cursor:pointer">
-            <input type="checkbox" class="checkpoint-check plan-checkbox" data-phase="${phaseKey}" data-item="${esc(itemId)}" ${isChecked ? 'checked' : ''} />
-            <span style="font-size:0.9rem${isChecked ? ';opacity:0.5;text-decoration:line-through' : ''}">${esc(label)}</span>
-          </label>`;
-        });
+        if (items.length) {
+          html += '<div style="margin-top:12px">';
+          items.forEach(item => {
+            const itemId = typeof item === 'string' ? item : (item.id || item);
+            const label = (typeof item === 'object' && item.label) ? item.label : (ITEM_LABELS[itemId] || itemId);
+            const isChecked = completed.includes(itemId);
+            html += `<label class="checkpoint-item flex gap-12" style="align-items:center;padding:6px 0;cursor:pointer">
+              <input type="checkbox" class="checkpoint-check plan-checkbox" data-phase="${esc(phaseKey)}" data-item="${esc(itemId)}" ${isChecked ? 'checked' : ''} />
+              <span style="font-size:0.9rem${isChecked ? ';opacity:0.5;text-decoration:line-through' : ''}">${esc(label)}</span>
+            </label>`;
+          });
+          html += '</div>';
+        }
+
+        if (phase.milestone) {
+          html += `<div class="milestone text-muted" style="margin-top:12px;font-size:0.8rem;font-style:italic">Milestone: ${esc(phase.milestone)}</div>`;
+        }
+        html += '</div>';
+      });
+    } else {
+      // Fallback: use hardcoded PHASE_META
+      for (let phase = 1; phase <= 4; phase++) {
+        const meta = PHASE_META[phase];
+        const phaseKey = `phase-${phase}`;
+        const phaseData = checkpoints[phaseKey] || { items: [], completed: [] };
+        const items = phaseData.items || [];
+        const completed = phaseData.completed || [];
+        const isCurrent = phase === currentPhase;
+
+        const completedCount = completed.length;
+        const totalCount = items.length;
+
+        html += `<div class="phase-card${isCurrent ? ' current' : ''}" style="margin-bottom:20px">
+          <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+            <span class="phase-num">${phase}</span>
+            <div>
+              <div class="phase-title">${esc(meta.title)}</div>
+              <div class="text-muted" style="font-size:0.85rem">${esc(meta.goal)}</div>
+            </div>
+            <span class="text-muted" style="margin-left:auto;font-size:0.85rem">${completedCount}/${totalCount}</span>
+          </div>`;
+
+        if (items.length) {
+          html += '<div style="margin-top:12px">';
+          items.forEach(itemId => {
+            const isChecked = completed.includes(itemId);
+            const label = ITEM_LABELS[itemId] || itemId;
+            html += `<label class="checkpoint-item flex gap-12" style="align-items:center;padding:6px 0;cursor:pointer">
+              <input type="checkbox" class="checkpoint-check plan-checkbox" data-phase="${phaseKey}" data-item="${esc(itemId)}" ${isChecked ? 'checked' : ''} />
+              <span style="font-size:0.9rem${isChecked ? ';opacity:0.5;text-decoration:line-through' : ''}">${esc(label)}</span>
+            </label>`;
+          });
+          html += '</div>';
+        }
+
+        html += `<div class="milestone text-muted" style="margin-top:12px;font-size:0.8rem;font-style:italic">Milestone: ${esc(meta.milestone)}</div>`;
         html += '</div>';
       }
-
-      html += `<div class="milestone text-muted" style="margin-top:12px;font-size:0.8rem;font-style:italic">Milestone: ${esc(meta.milestone)}</div>`;
-      html += '</div>';
     }
 
     el.innerHTML = html;
@@ -1071,7 +1250,7 @@ async function loadStudyPlan() {
     // Checkbox handlers
     el.querySelectorAll('.plan-checkbox').forEach(cb => {
       cb.addEventListener('change', async () => {
-        await api('/api/study-plan', {
+        await api(`/api/programs/${currentProgramId}/study-plan`, {
           method: 'PUT',
           body: {
             phase: cb.dataset.phase,
@@ -1098,7 +1277,7 @@ async function loadExercises() {
   const el = document.getElementById('view-exercises');
   el.innerHTML = '<p class="text-muted text-center">Loading exercises...</p>';
   try {
-    const exercises = await api('/api/exercises');
+    const exercises = await api(`/api/programs/${currentProgramId}/exercises`);
 
     let html = '<h2 class="mb-20">Hands-On Exercises</h2>';
 
@@ -1126,7 +1305,7 @@ async function loadExercises() {
         ? [...ex.domains.matchAll(/(\d)/g)].map(m => m[1])
         : Array.isArray(ex.domains) ? ex.domains.map(String) : [];
       domainNums.forEach(num => {
-        const color = DOMAIN_COLORS[num] || '#888';
+        const color = getDomainColor(num);
         html += `<span class="domain-pill" style="background:${color};color:#000;padding:2px 8px;border-radius:12px;font-size:0.7rem;font-weight:700">D${num}</span>`;
       });
 
@@ -1175,7 +1354,7 @@ async function loadExercises() {
     el.querySelectorAll('.exercise-criteria-cb').forEach(cb => {
       cb.addEventListener('change', async (e) => {
         e.stopPropagation();
-        await api(`/api/exercises/${cb.dataset.num}/checklist`, {
+        await api(`/api/programs/${currentProgramId}/exercises/${cb.dataset.num}/checklist`, {
           method: 'PUT',
           body: { criteriaId: cb.dataset.criteria, completed: cb.checked }
         });
@@ -1208,12 +1387,21 @@ function showApp(user) {
   document.getElementById('app-footer').style.display = '';
   document.getElementById('user-display-name').textContent = user.displayName || user.email;
 
+  // Hide program tabs at academy level
+  const tabs = document.getElementById('program-tabs');
+  if (tabs) tabs.style.display = 'none';
+
   // Re-bind tab listeners after header is visible
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => switchView(tab.dataset.view));
   });
 
-  loadView('dashboard');
+  // Reset program state
+  currentProgramId = null;
+  currentProgramManifest = null;
+  updateBreadcrumb();
+
+  switchView('academy');
 }
 
 function showAuthError(formId, message) {
@@ -1298,6 +1486,8 @@ function initAuth() {
   document.getElementById('logout-btn').addEventListener('click', async () => {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch {}
     currentUser = null;
+    currentProgramId = null;
+    currentProgramManifest = null;
     showAuthScreen();
   });
 

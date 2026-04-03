@@ -16,6 +16,7 @@ const ROOT = __dirname;
 const DATA_DIR = path.join(ROOT, 'data');
 const USERS_FILE = path.join(DATA_DIR, 'users.json');
 const SESSIONS_DIR = path.join(ROOT, 'sessions');
+const PROGRAMS_DIR = path.join(ROOT, 'programs');
 
 // ─── Security Middleware ────────────────────────────────────────────────────
 
@@ -178,156 +179,43 @@ class ObjectStore {
   merge(partial) { this.data = { ...this.data, ...partial }; this.save(); return this.data; }
 }
 
-// ─── Default data for new users ─────────────────────────────────────────────
+// ─── Program Discovery ─────────────────────────────────────────────────────
 
-const defaultPrograms = [
-  {
-    id: 'claude-certified-architect',
-    name: 'Claude Certified Architect – Foundations',
-    description: '5-domain certification covering agentic architecture, tool design, Claude Code, prompt engineering, and reliability.',
-    builtIn: true,
-    modules: [
-      { id: 'module-01', title: 'Agentic Architecture & Orchestration', file: 'curriculum_module-01-agentic-architecture.md', domain: 1, weight: 27 },
-      { id: 'module-02', title: 'Tool Design & MCP Integration', file: 'curriculum_module-02-tool-design-mcp.md', domain: 2, weight: 18 },
-      { id: 'module-03', title: 'Claude Code Configuration & Workflows', file: 'curriculum_module-03-claude-code-workflows.md', domain: 3, weight: 20 },
-      { id: 'module-04', title: 'Prompt Engineering & Structured Output', file: 'curriculum_module-04-prompt-engineering.md', domain: 4, weight: 20 },
-      { id: 'module-05', title: 'Context Management & Reliability', file: 'curriculum_module-05-context-reliability.md', domain: 5, weight: 15 }
-    ],
-    created: new Date().toISOString()
+const programManifests = {};
+const contentCache = {};
+
+function discoverPrograms() {
+  console.log('Discovering programs...');
+  if (!fs.existsSync(PROGRAMS_DIR)) {
+    console.warn(`  Programs directory not found: ${PROGRAMS_DIR}`);
+    return;
   }
-];
-
-const defaultProgress = {
-  modulesRead: {},
-  streak: { currentStreak: 0, longestStreak: 0, lastActivity: null, activityDates: [] },
-  studyPlan: {
-    currentPhase: 1,
-    checkpoints: {
-      'phase-1': { items: ['read-exam-guide', 'read-domains', 'skim-glossary', 'study-module-01', 'study-module-03', 'assess-domain-01', 'assess-domain-03'], completed: [] },
-      'phase-2': { items: ['study-module-02', 'study-module-04', 'exercise-1', 'exercise-3', 'assess-domain-02', 'assess-domain-04'], completed: [] },
-      'phase-3': { items: ['study-module-05', 'revisit-module-03-cicd', 'exercise-2', 'exercise-4', 'assess-domain-05'], completed: [] },
-      'phase-4': { items: ['full-scenario-practice', 'timed-mock-exam', 'review-weak-domains', 'score-80-plus'], completed: [] }
+  const entries = fs.readdirSync(PROGRAMS_DIR, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const manifestPath = path.join(PROGRAMS_DIR, entry.name, 'program.json');
+    if (!fs.existsSync(manifestPath)) continue;
+    try {
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      const programId = manifest.id || entry.name;
+      programManifests[programId] = manifest;
+      console.log(`  Found program: ${manifest.name} (${programId})`);
+    } catch (e) {
+      console.warn(`  Could not load manifest for ${entry.name}:`, e.message);
     }
-  },
-  exercises: {}
-};
-
-// ─── Per-user store factory ─────────────────────────────────────────────────
-
-// Cache open stores so we don't re-read files on every request
-const storeCache = {};
-
-function getUserStores(userId) {
-  if (storeCache[userId]) return storeCache[userId];
-  const dir = getUserDataDir(userId);
-  const stores = {
-    programs:    new DataStore(dir, 'programs.json', JSON.parse(JSON.stringify(defaultPrograms))),
-    quizHistory: new DataStore(dir, 'quiz-history.json', []),
-    notes:       new DataStore(dir, 'notes.json', []),
-    progress:    new ObjectStore(dir, 'progress.json', JSON.parse(JSON.stringify(defaultProgress))),
-  };
-  storeCache[userId] = stores;
-  return stores;
+  }
+  console.log(`  Total programs discovered: ${Object.keys(programManifests).length}\n`);
 }
 
-// ─── Authentication Middleware ───────────────────────────────────────────────
+// ─── Markdown file reader (program-scoped) ──────────────────────────────────
 
-function requireAuth(req, res, next) {
-  if (!req.session.userId) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  req.stores = getUserStores(req.session.userId);
-  next();
-}
-
-// ─── Auth Routes ────────────────────────────────────────────────────────────
-
-app.post('/api/auth/register', authLimiter, async (req, res) => {
-  const { email, password, displayName } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password required' });
-  }
-  if (password.length < 8) {
-    return res.status(400).json({ error: 'Password must be at least 8 characters' });
-  }
-  const emailLower = email.toLowerCase().trim();
-  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower)) {
-    return res.status(400).json({ error: 'Invalid email format' });
-  }
-
-  const users = loadUsers();
-  if (users.find(u => u.email === emailLower)) {
-    return res.status(409).json({ error: 'Account already exists' });
-  }
-
-  const hash = await bcrypt.hash(password, 12);
-  const user = {
-    id: uuidv4(),
-    email: emailLower,
-    displayName: (displayName || emailLower.split('@')[0]).trim().slice(0, 50),
-    passwordHash: hash,
-    created: new Date().toISOString()
-  };
-  users.push(user);
-  saveUsers(users);
-
-  // Auto-login after registration
-  req.session.userId = user.id;
-  res.json({ id: user.id, email: user.email, displayName: user.displayName });
-});
-
-app.post('/api/auth/login', authLimiter, async (req, res) => {
-  const { email, password } = req.body;
-  if (!email || !password) {
-    return res.status(400).json({ error: 'Email and password required' });
-  }
-
-  const users = loadUsers();
-  const user = users.find(u => u.email === email.toLowerCase().trim());
-  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
-    return res.status(401).json({ error: 'Invalid email or password' });
-  }
-
-  req.session.userId = user.id;
-  res.json({ id: user.id, email: user.email, displayName: user.displayName });
-});
-
-app.post('/api/auth/logout', (req, res) => {
-  req.session.destroy(() => {
-    res.clearCookie('connect.sid');
-    res.json({ ok: true });
-  });
-});
-
-app.get('/api/auth/me', (req, res) => {
-  if (!req.session.userId) {
-    return res.status(401).json({ error: 'Not authenticated' });
-  }
-  const users = loadUsers();
-  const user = users.find(u => u.id === req.session.userId);
-  if (!user) {
-    return res.status(401).json({ error: 'User not found' });
-  }
-  res.json({ id: user.id, email: user.email, displayName: user.displayName });
-});
-
-// ─── Markdown parsers ────────────────────────────────────────────────────────
-
-const contentCache = {
-  modules: {},
-  assessments: {},
-  scenarios: [],
-  glossary: [],
-  exercises: [],
-  studyPlan: null,
-  domains: null
-};
-
-function readMdFile(filename) {
-  const fp = path.join(ROOT, filename);
+function readMdFile(programId, relativePath) {
+  const fp = path.join(PROGRAMS_DIR, programId, relativePath);
   if (!fs.existsSync(fp)) return '';
   return fs.readFileSync(fp, 'utf8');
 }
+
+// ─── Markdown parsers ────────────────────────────────────────────────────────
 
 function parseAssessmentQuestions(md) {
   const questions = [];
@@ -477,53 +365,247 @@ function parseExercises(md) {
   return exercises;
 }
 
-// ─── Load and cache all content at startup ──────────────────────────────────
+// ─── Load all program content at startup ────────────────────────────────────
 
-function loadContent() {
-  console.log('Loading curriculum content...');
+function loadAllProgramContent() {
+  console.log('Loading program content...');
+  for (const [programId, manifest] of Object.entries(programManifests)) {
+    console.log(`  Loading content for: ${manifest.name}`);
+    const cache = {
+      modules: {},
+      assessments: {},
+      scenarios: [],
+      glossary: [],
+      exercises: [],
+      studyPlan: null,
+      domains: null
+    };
 
-  const programs = defaultPrograms;
-  const builtIn = programs.find(p => p.builtIn);
-  if (builtIn) {
-    for (const mod of builtIn.modules) {
-      const md = readMdFile(mod.file);
-      if (md) {
-        contentCache.modules[mod.id] = {
-          ...mod,
-          ...parseCurriculumModule(md)
-        };
+    // Load curriculum modules from manifest
+    if (manifest.modules && Array.isArray(manifest.modules)) {
+      for (const mod of manifest.modules) {
+        const md = readMdFile(programId, mod.file);
+        if (md) {
+          cache.modules[mod.id] = {
+            ...mod,
+            ...parseCurriculumModule(md)
+          };
+        }
       }
     }
-  }
 
-  for (let d = 1; d <= 5; d++) {
-    const md = readMdFile(`assessments_domain-0${d}-questions.md`);
-    if (md) {
-      contentCache.assessments[d] = parseAssessmentQuestions(md);
+    // Load assessment domain files from manifest
+    if (manifest.assessments && manifest.assessments.domainFiles) {
+      for (const [domainNum, filePath] of Object.entries(manifest.assessments.domainFiles)) {
+        const md = readMdFile(programId, filePath);
+        if (md) {
+          cache.assessments[domainNum] = parseAssessmentQuestions(md);
+        }
+      }
+    }
+
+    // Load exam scenarios from manifest
+    if (manifest.assessments && manifest.assessments.scenarioFile) {
+      const scenarioMd = readMdFile(programId, manifest.assessments.scenarioFile);
+      if (scenarioMd) {
+        cache.scenarios = parseExamScenarios(scenarioMd);
+      }
+    }
+
+    // Load glossary from manifest
+    if (manifest.resources && manifest.resources.glossary) {
+      const glossaryMd = readMdFile(programId, manifest.resources.glossary);
+      if (glossaryMd) {
+        cache.glossary = parseGlossary(glossaryMd);
+      }
+    }
+
+    // Load exercises from manifest
+    if (manifest.resources && manifest.resources.exercises) {
+      const exerciseMd = readMdFile(programId, manifest.resources.exercises);
+      if (exerciseMd) {
+        cache.exercises = parseExercises(exerciseMd);
+      }
+    }
+
+    contentCache[programId] = cache;
+
+    console.log(`    Modules: ${Object.keys(cache.modules).length}`);
+    console.log(`    Assessment domains: ${Object.keys(cache.assessments).length}`);
+    console.log(`    Exam scenarios: ${cache.scenarios.length}`);
+    console.log(`    Glossary terms: ${cache.glossary.length}`);
+    console.log(`    Exercises: ${cache.exercises.length}`);
+  }
+  console.log('All program content loaded.\n');
+}
+
+// ─── Default progress builder (from manifest study plan) ────────────────────
+
+function buildDefaultProgress(manifest) {
+  const progress = {
+    modulesRead: {},
+    streak: { currentStreak: 0, longestStreak: 0, lastActivity: null, activityDates: [] },
+    studyPlan: {
+      currentPhase: 1,
+      checkpoints: {}
+    },
+    exercises: {}
+  };
+
+  if (manifest && manifest.studyPlan && manifest.studyPlan.phases) {
+    for (const phase of manifest.studyPlan.phases) {
+      progress.studyPlan.checkpoints[phase.id] = {
+        items: phase.items.map(item => item.id),
+        completed: []
+      };
     }
   }
 
-  const scenarioMd = readMdFile('assessments_exam-scenarios.md');
-  if (scenarioMd) {
-    contentCache.scenarios = parseExamScenarios(scenarioMd);
-  }
+  return progress;
+}
 
-  const glossaryMd = readMdFile('docs_key-concepts-glossary.md');
-  if (glossaryMd) {
-    contentCache.glossary = parseGlossary(glossaryMd);
-  }
+// ─── Per-user store factory ─────────────────────────────────────────────────
 
-  const exerciseMd = readMdFile('docs_hands-on-exercises.md');
-  if (exerciseMd) {
-    contentCache.exercises = parseExercises(exerciseMd);
-  }
+// Cache open stores so we don't re-read files on every request
+const storeCache = {};
 
-  console.log(`  Modules: ${Object.keys(contentCache.modules).length}`);
-  console.log(`  Assessment domains: ${Object.keys(contentCache.assessments).length}`);
-  console.log(`  Exam scenarios: ${contentCache.scenarios.length}`);
-  console.log(`  Glossary terms: ${contentCache.glossary.length}`);
-  console.log(`  Exercises: ${contentCache.exercises.length}`);
-  console.log('Content loaded.\n');
+function getUserStores(userId) {
+  if (storeCache[userId]) return storeCache[userId];
+  const dir = getUserDataDir(userId);
+  const stores = {
+    quizHistory: new DataStore(dir, 'quiz-history.json', []),
+    notes:       new DataStore(dir, 'notes.json', []),
+    progress:    new ObjectStore(dir, 'progress.json', {}),
+  };
+  storeCache[userId] = stores;
+  return stores;
+}
+
+// Per-program store cache
+const programStoreCache = {};
+
+function getUserProgramStores(userId, programId) {
+  const cacheKey = `${userId}:${programId}`;
+  if (programStoreCache[cacheKey]) return programStoreCache[cacheKey];
+  const dir = path.join(DATA_DIR, 'users', userId, 'programs', programId);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  const manifest = programManifests[programId];
+  const defaultProg = buildDefaultProgress(manifest);
+  const stores = {
+    quizHistory: new DataStore(dir, 'quiz-history.json', []),
+    notes:       new DataStore(dir, 'notes.json', []),
+    progress:    new ObjectStore(dir, 'progress.json', JSON.parse(JSON.stringify(defaultProg))),
+  };
+  programStoreCache[cacheKey] = stores;
+  return stores;
+}
+
+function getUserEnrollmentStore(userId) {
+  const dir = getUserDataDir(userId);
+  return new DataStore(dir, 'enrollment.json', []);
+}
+
+// ─── Data migration (old flat format to program-scoped) ─────────────────────
+
+function migrateUserData() {
+  console.log('Checking for user data migrations...');
+  const usersDir = path.join(DATA_DIR, 'users');
+  if (!fs.existsSync(usersDir)) {
+    console.log('  No users directory found, skipping migration.\n');
+    return;
+  }
+  const userDirs = fs.readdirSync(usersDir, { withFileTypes: true });
+  let migrated = 0;
+  for (const entry of userDirs) {
+    if (!entry.isDirectory()) continue;
+    const userId = entry.name;
+    const userDir = path.join(usersDir, userId);
+    const oldProgressPath = path.join(userDir, 'progress.json');
+    const newProgramDir = path.join(userDir, 'programs', 'claude-university');
+    const newProgressPath = path.join(newProgramDir, 'progress.json');
+
+    // Only migrate if old format exists AND new format does NOT
+    if (fs.existsSync(oldProgressPath) && !fs.existsSync(newProgressPath)) {
+      console.log(`  Migrating user ${userId} to program-scoped format...`);
+      if (!fs.existsSync(newProgramDir)) fs.mkdirSync(newProgramDir, { recursive: true });
+
+      // Copy progress.json
+      try {
+        fs.copyFileSync(oldProgressPath, newProgressPath);
+      } catch (e) {
+        console.warn(`    Could not copy progress.json: ${e.message}`);
+      }
+
+      // Copy quiz-history.json if it exists
+      const oldQuizPath = path.join(userDir, 'quiz-history.json');
+      if (fs.existsSync(oldQuizPath)) {
+        try {
+          fs.copyFileSync(oldQuizPath, path.join(newProgramDir, 'quiz-history.json'));
+        } catch (e) {
+          console.warn(`    Could not copy quiz-history.json: ${e.message}`);
+        }
+      }
+
+      // Copy notes.json if it exists
+      const oldNotesPath = path.join(userDir, 'notes.json');
+      if (fs.existsSync(oldNotesPath)) {
+        try {
+          fs.copyFileSync(oldNotesPath, path.join(newProgramDir, 'notes.json'));
+        } catch (e) {
+          console.warn(`    Could not copy notes.json: ${e.message}`);
+        }
+      }
+
+      // Create enrollment.json
+      const enrollmentPath = path.join(userDir, 'enrollment.json');
+      if (!fs.existsSync(enrollmentPath)) {
+        const enrollment = [{
+          programId: 'claude-university',
+          enrolledAt: new Date().toISOString(),
+          status: 'active'
+        }];
+        try {
+          fs.writeFileSync(enrollmentPath, JSON.stringify(enrollment, null, 2), 'utf8');
+        } catch (e) {
+          console.warn(`    Could not create enrollment.json: ${e.message}`);
+        }
+      }
+
+      migrated++;
+      console.log(`    Done.`);
+    }
+  }
+  if (migrated === 0) {
+    console.log('  No migrations needed.');
+  } else {
+    console.log(`  Migrated ${migrated} user(s).`);
+  }
+  console.log('');
+}
+
+// ─── Authentication Middleware ───────────────────────────────────────────────
+
+function requireAuth(req, res, next) {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  req.stores = getUserStores(req.session.userId);
+  next();
+}
+
+// ─── Program Middleware ─────────────────────────────────────────────────────
+
+function requireProgram(req, res, next) {
+  const { programId } = req.params;
+  if (!contentCache[programId]) {
+    return res.status(404).json({ error: 'Program not found' });
+  }
+  req.programId = programId;
+  req.programCache = contentCache[programId];
+  req.programManifest = programManifests[programId];
+  const userId = req.session.userId;
+  req.programStores = getUserProgramStores(userId, programId);
+  next();
 }
 
 // ─── Activity tracking helper ───────────────────────────────────────────────
@@ -551,28 +633,123 @@ function recordActivity(stores) {
   stores.progress.set(progress);
 }
 
+// ─── Auth Routes ────────────────────────────────────────────────────────────
+
+app.post('/api/auth/register', authLimiter, async (req, res) => {
+  const { email, password, displayName } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password required' });
+  }
+  if (password.length < 8) {
+    return res.status(400).json({ error: 'Password must be at least 8 characters' });
+  }
+  const emailLower = email.toLowerCase().trim();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(emailLower)) {
+    return res.status(400).json({ error: 'Invalid email format' });
+  }
+
+  const users = loadUsers();
+  if (users.find(u => u.email === emailLower)) {
+    return res.status(409).json({ error: 'Account already exists' });
+  }
+
+  const hash = await bcrypt.hash(password, 12);
+  const user = {
+    id: uuidv4(),
+    email: emailLower,
+    displayName: (displayName || emailLower.split('@')[0]).trim().slice(0, 50),
+    passwordHash: hash,
+    created: new Date().toISOString()
+  };
+  users.push(user);
+  saveUsers(users);
+
+  // Auto-login after registration
+  req.session.userId = user.id;
+  res.json({ id: user.id, email: user.email, displayName: user.displayName });
+});
+
+app.post('/api/auth/login', authLimiter, async (req, res) => {
+  const { email, password } = req.body;
+  if (!email || !password) {
+    return res.status(400).json({ error: 'Email and password required' });
+  }
+
+  const users = loadUsers();
+  const user = users.find(u => u.email === email.toLowerCase().trim());
+  if (!user || !(await bcrypt.compare(password, user.passwordHash))) {
+    return res.status(401).json({ error: 'Invalid email or password' });
+  }
+
+  req.session.userId = user.id;
+  res.json({ id: user.id, email: user.email, displayName: user.displayName });
+});
+
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.clearCookie('connect.sid');
+    res.json({ ok: true });
+  });
+});
+
+app.get('/api/auth/me', (req, res) => {
+  if (!req.session.userId) {
+    return res.status(401).json({ error: 'Not authenticated' });
+  }
+  const users = loadUsers();
+  const user = users.find(u => u.id === req.session.userId);
+  if (!user) {
+    return res.status(401).json({ error: 'User not found' });
+  }
+  res.json({ id: user.id, email: user.email, displayName: user.displayName });
+});
+
 // ─── API: Stats (consumed by LaunchPad — no auth required) ──────────────────
 
 app.get('/api/stats', (req, res) => {
   // Public endpoint for LaunchPad integration — returns aggregate stats
   // If not logged in, return zeros
   if (!req.session.userId) {
-    return res.json({ totalModules: 5, modulesCompleted: 0, quizzesTaken: 0, avgScore: 0, studyStreak: 0 });
+    return res.json({ totalModules: 0, modulesCompleted: 0, quizzesTaken: 0, avgScore: 0, studyStreak: 0 });
   }
-  const stores = getUserStores(req.session.userId);
-  const progress = stores.progress.get();
-  const quizHistory = stores.quizHistory.getAll();
-  const modulesRead = Object.keys(progress.modulesRead || {});
-  const completedModules = modulesRead.filter(m => (progress.modulesRead[m].percentComplete || 0) >= 100).length;
-  const avgScore = quizHistory.length > 0
-    ? Math.round(quizHistory.reduce((s, q) => s + q.percentage, 0) / quizHistory.length)
-    : 0;
+  const userId = req.session.userId;
+  const enrollmentStore = getUserEnrollmentStore(userId);
+  const enrollments = enrollmentStore.getAll().filter(e => e.status === 'active');
+
+  let totalModules = 0;
+  let modulesCompleted = 0;
+  let quizzesTaken = 0;
+  let totalScore = 0;
+  let bestStreak = 0;
+
+  for (const enrollment of enrollments) {
+    const manifest = programManifests[enrollment.programId];
+    if (!manifest) continue;
+    const programStores = getUserProgramStores(userId, enrollment.programId);
+    const progress = programStores.progress.get();
+    const quizHistory = programStores.quizHistory.getAll();
+
+    const moduleCount = manifest.modules ? manifest.modules.length : 0;
+    totalModules += moduleCount;
+
+    const modulesRead = Object.keys(progress.modulesRead || {});
+    modulesCompleted += modulesRead.filter(m => (progress.modulesRead[m].percentComplete || 0) >= 100).length;
+
+    quizzesTaken += quizHistory.length;
+    totalScore += quizHistory.reduce((s, q) => s + q.percentage, 0);
+
+    const streak = (progress.streak || {}).currentStreak || 0;
+    if (streak > bestStreak) bestStreak = streak;
+  }
+
+  const avgScore = quizzesTaken > 0 ? Math.round(totalScore / quizzesTaken) : 0;
+
   res.json({
-    totalModules: 5,
-    modulesCompleted: completedModules,
-    quizzesTaken: quizHistory.length,
+    totalModules,
+    modulesCompleted,
+    quizzesTaken,
     avgScore,
-    studyStreak: (progress.streak || {}).currentStreak || 0
+    studyStreak: bestStreak
   });
 });
 
@@ -584,33 +761,139 @@ app.use('/api', (req, res, next) => {
   requireAuth(req, res, next);
 });
 
-// ─── API: Dashboard ─────────────────────────────────────────────────────────
+// ─── API: Academy — Program listing and enrollment ──────────────────────────
 
-app.get('/api/dashboard', (req, res) => {
-  const stores = req.stores;
+app.get('/api/academy/programs', (req, res) => {
+  const userId = req.session.userId;
+  const enrollmentStore = getUserEnrollmentStore(userId);
+  const enrollments = enrollmentStore.getAll();
+  const programs = Object.entries(programManifests).map(([programId, manifest]) => {
+    const enrollment = enrollments.find(e => e.programId === programId);
+    return {
+      id: programId,
+      name: manifest.name,
+      shortName: manifest.shortName || manifest.name,
+      description: manifest.description || '',
+      icon: manifest.icon || '',
+      color: manifest.color || '#4a7c59',
+      version: manifest.version || '1.0.0',
+      builtIn: manifest.builtIn || false,
+      domainCount: manifest.domains ? Object.keys(manifest.domains).length : 0,
+      moduleCount: manifest.modules ? manifest.modules.length : 0,
+      enrolled: !!enrollment,
+      enrollmentStatus: enrollment ? enrollment.status : null,
+      enrolledAt: enrollment ? enrollment.enrolledAt : null
+    };
+  });
+  res.json(programs);
+});
+
+app.post('/api/academy/enroll/:programId', (req, res) => {
+  const { programId } = req.params;
+  if (!programManifests[programId]) {
+    return res.status(404).json({ error: 'Program not found' });
+  }
+  const userId = req.session.userId;
+  const enrollmentStore = getUserEnrollmentStore(userId);
+  const enrollments = enrollmentStore.getAll();
+  const existing = enrollments.find(e => e.programId === programId);
+  if (existing) {
+    if (existing.status === 'active') {
+      return res.json({ message: 'Already enrolled', enrollment: existing });
+    }
+    // Re-activate if previously inactive
+    existing.status = 'active';
+    existing.reactivatedAt = new Date().toISOString();
+    enrollmentStore.update(existing.id, existing);
+    return res.json({ message: 'Enrollment reactivated', enrollment: existing });
+  }
+  const enrollment = enrollmentStore.add({
+    programId,
+    enrolledAt: new Date().toISOString(),
+    status: 'active'
+  });
+  // Initialize program stores (creates default progress)
+  getUserProgramStores(userId, programId);
+  res.json({ message: 'Enrolled successfully', enrollment });
+});
+
+app.get('/api/academy/enrollment', (req, res) => {
+  const userId = req.session.userId;
+  const enrollmentStore = getUserEnrollmentStore(userId);
+  const enrollments = enrollmentStore.getAll();
+  const result = enrollments.map(enrollment => {
+    const manifest = programManifests[enrollment.programId];
+    if (!manifest) {
+      return { ...enrollment, programName: 'Unknown Program', progress: null };
+    }
+    const programStores = getUserProgramStores(userId, enrollment.programId);
+    const progress = programStores.progress.get();
+    const quizHistory = programStores.quizHistory.getAll();
+
+    // Build progress summary
+    const moduleCount = manifest.modules ? manifest.modules.length : 0;
+    const modulesRead = Object.keys(progress.modulesRead || {});
+    const completedModules = modulesRead.filter(m => (progress.modulesRead[m].percentComplete || 0) >= 100).length;
+    const avgScore = quizHistory.length > 0
+      ? Math.round(quizHistory.reduce((s, q) => s + q.percentage, 0) / quizHistory.length)
+      : 0;
+
+    return {
+      ...enrollment,
+      programName: manifest.name,
+      programShortName: manifest.shortName || manifest.name,
+      programIcon: manifest.icon || '',
+      programColor: manifest.color || '#4a7c59',
+      progressSummary: {
+        totalModules: moduleCount,
+        modulesCompleted: completedModules,
+        quizzesTaken: quizHistory.length,
+        avgScore,
+        studyStreak: (progress.streak || {}).currentStreak || 0
+      }
+    };
+  });
+  res.json(result);
+});
+
+// ─── API: Program-scoped routes ─────────────────────────────────────────────
+
+// Dashboard
+app.get('/api/programs/:programId/dashboard', requireProgram, (req, res) => {
+  const stores = req.programStores;
+  const manifest = req.programManifest;
+  const cache = req.programCache;
   const progress = stores.progress.get();
   const quizHistory = stores.quizHistory.getAll();
-  const domainNames = {
-    1: 'Agentic Architecture', 2: 'Tool Design & MCP',
-    3: 'Claude Code Workflows', 4: 'Prompt Engineering',
-    5: 'Context & Reliability'
-  };
-  const domainWeights = { 1: 27, 2: 18, 3: 20, 4: 20, 5: 15 };
+
+  const domainEntries = manifest.domains || {};
   const domainMastery = [];
-  for (let d = 1; d <= 5; d++) {
-    const domainQuizzes = quizHistory.filter(q => q.domain === d);
+
+  for (const [d, domainInfo] of Object.entries(domainEntries)) {
+    const domainNum = parseInt(d);
+    const domainQuizzes = quizHistory.filter(q => q.domain === domainNum);
     const avgQuiz = domainQuizzes.length > 0
       ? domainQuizzes.reduce((s, q) => s + q.percentage, 0) / domainQuizzes.length : 0;
-    const moduleId = `module-0${d}`;
+    // Find the module matching this domain
+    const manifestModule = (manifest.modules || []).find(m => m.domain === domainNum);
+    const moduleId = manifestModule ? manifestModule.id : `module-0${d}`;
     const readPct = (progress.modulesRead?.[moduleId]?.percentComplete) || 0;
     const mastery = Math.round(0.7 * avgQuiz + 0.3 * readPct);
     domainMastery.push({
-      domain: d, name: domainNames[d], weight: domainWeights[d],
+      domain: domainNum, name: domainInfo.name, weight: domainInfo.weight,
       quizAvg: Math.round(avgQuiz), sectionsRead: Math.round(readPct), mastery
     });
   }
-  const overallMastery = domainMastery.length > 0
-    ? Math.round(domainMastery.reduce((s, d) => s + d.mastery * d.weight, 0) / 100) : 0;
+
+  const totalWeight = domainMastery.reduce((s, d) => s + d.weight, 0);
+  const overallMastery = totalWeight > 0
+    ? Math.round(domainMastery.reduce((s, d) => s + d.mastery * d.weight, 0) / totalWeight) : 0;
+
+  const domainNames = {};
+  for (const [d, info] of Object.entries(domainEntries)) {
+    domainNames[d] = info.name;
+  }
+
   const recentQuizzes = quizHistory.slice(-5).reverse().map(q => ({
     id: q.id, domain: q.domain, domainName: domainNames[q.domain] || q.type,
     date: q.date, score: q.score, total: q.total, percentage: q.percentage
@@ -623,62 +906,16 @@ app.get('/api/dashboard', (req, res) => {
     recentQuizzes,
     studyPlanPhase: progress.studyPlan?.currentPhase || 1,
     totalQuestionsAnswered: totalAnswered,
-    totalCorrect,
-    programs: stores.programs.getAll().length
+    totalCorrect
   });
 });
 
-// ─── API: Programs ──────────────────────────────────────────────────────────
-
-app.get('/api/programs', (req, res) => {
-  res.json(req.stores.programs.getAll());
-});
-
-app.post('/api/programs', (req, res) => {
-  const { name, description } = req.body;
-  if (!name || typeof name !== 'string' || name.trim().length === 0) {
-    return res.status(400).json({ error: 'Name required' });
-  }
-  const program = req.stores.programs.add({
-    name: name.trim().slice(0, 200),
-    description: (description || '').trim().slice(0, 1000),
-    builtIn: false, modules: [], created: new Date().toISOString()
-  });
-  res.json(program);
-});
-
-app.delete('/api/programs/:id', (req, res) => {
-  const prog = req.stores.programs.getById(req.params.id);
-  if (!prog) return res.status(404).json({ error: 'Not found' });
-  if (prog.builtIn) return res.status(400).json({ error: 'Cannot delete built-in program' });
-  req.stores.programs.remove(req.params.id);
-  res.json({ ok: true });
-});
-
-app.post('/api/programs/:id/modules', (req, res) => {
-  const prog = req.stores.programs.getById(req.params.id);
-  if (!prog) return res.status(404).json({ error: 'Not found' });
-  if (prog.builtIn) return res.status(400).json({ error: 'Cannot modify built-in program' });
-  const { title, content } = req.body;
-  if (!title || typeof title !== 'string' || title.trim().length === 0) {
-    return res.status(400).json({ error: 'Title required' });
-  }
-  const mod = {
-    id: uuidv4(),
-    title: title.trim().slice(0, 200),
-    content: (content || '').slice(0, 50000),
-    created: new Date().toISOString()
-  };
-  prog.modules.push(mod);
-  req.stores.programs.update(prog.id, { modules: prog.modules });
-  res.json(mod);
-});
-
-// ─── API: Curriculum ────────────────────────────────────────────────────────
-
-app.get('/api/curriculum', (req, res) => {
-  const progress = req.stores.progress.get();
-  const modules = Object.values(contentCache.modules).map(m => ({
+// Curriculum
+app.get('/api/programs/:programId/curriculum', requireProgram, (req, res) => {
+  const stores = req.programStores;
+  const cache = req.programCache;
+  const progress = stores.progress.get();
+  const modules = Object.values(cache.modules).map(m => ({
     id: m.id, title: m.title, domain: m.domain, weight: m.weight,
     sections: m.sections,
     progress: progress.modulesRead?.[m.id] || { sectionsCompleted: [], percentComplete: 0 }
@@ -686,20 +923,13 @@ app.get('/api/curriculum', (req, res) => {
   res.json(modules);
 });
 
-app.get('/api/curriculum/:moduleId', (req, res) => {
-  const mod = contentCache.modules[req.params.moduleId];
+app.get('/api/programs/:programId/curriculum/:moduleId', requireProgram, (req, res) => {
+  const cache = req.programCache;
+  const mod = cache.modules[req.params.moduleId];
   if (!mod) {
-    const programs = req.stores.programs.getAll();
-    for (const p of programs) {
-      const cm = p.modules.find(m => m.id === req.params.moduleId);
-      if (cm && cm.content) {
-        const html = marked(cm.content);
-        return res.json({ id: cm.id, title: cm.title, html, toc: [], sections: [], custom: true });
-      }
-    }
     return res.status(404).json({ error: 'Module not found' });
   }
-  const progress = req.stores.progress.get();
+  const progress = req.programStores.progress.get();
   res.json({
     id: mod.id, title: mod.title, domain: mod.domain, weight: mod.weight,
     html: mod.html, toc: mod.toc, sections: mod.sections,
@@ -707,11 +937,13 @@ app.get('/api/curriculum/:moduleId', (req, res) => {
   });
 });
 
-app.put('/api/curriculum/:moduleId/progress', (req, res) => {
+app.put('/api/programs/:programId/curriculum/:moduleId/progress', requireProgram, (req, res) => {
   const { sectionId, completed } = req.body;
-  const mod = contentCache.modules[req.params.moduleId];
+  const cache = req.programCache;
+  const mod = cache.modules[req.params.moduleId];
   if (!mod) return res.status(404).json({ error: 'Module not found' });
-  const progress = req.stores.progress.get();
+  const stores = req.programStores;
+  const progress = stores.progress.get();
   if (!progress.modulesRead) progress.modulesRead = {};
   if (!progress.modulesRead[mod.id]) {
     progress.modulesRead[mod.id] = { sectionsCompleted: [], percentComplete: 0, lastRead: null };
@@ -725,27 +957,25 @@ app.put('/api/curriculum/:moduleId/progress', (req, res) => {
   modProgress.percentComplete = mod.sections.length > 0
     ? Math.round((modProgress.sectionsCompleted.length / mod.sections.length) * 100) : 0;
   modProgress.lastRead = new Date().toISOString();
-  req.stores.progress.set(progress);
-  recordActivity(req.stores);
+  stores.progress.set(progress);
+  recordActivity(stores);
   res.json(modProgress);
 });
 
-// ─── API: Assessments ───────────────────────────────────────────────────────
-
-app.get('/api/assessments/domains', (req, res) => {
-  const quizHistory = req.stores.quizHistory.getAll();
-  const domainNames = {
-    1: 'Agentic Architecture & Orchestration', 2: 'Tool Design & MCP Integration',
-    3: 'Claude Code Configuration & Workflows', 4: 'Prompt Engineering & Structured Output',
-    5: 'Context Management & Reliability'
-  };
+// Assessments
+app.get('/api/programs/:programId/assessments/domains', requireProgram, (req, res) => {
+  const cache = req.programCache;
+  const manifest = req.programManifest;
+  const quizHistory = req.programStores.quizHistory.getAll();
+  const domainEntries = manifest.domains || {};
   const domains = [];
-  for (let d = 1; d <= 5; d++) {
-    const qs = contentCache.assessments[d] || [];
-    const history = quizHistory.filter(q => q.domain === d && q.type === 'domain');
+  for (const [d, domainInfo] of Object.entries(domainEntries)) {
+    const domainNum = parseInt(d);
+    const qs = cache.assessments[d] || [];
+    const history = quizHistory.filter(q => q.domain === domainNum && q.type === 'domain');
     const lastAttempt = history.length > 0 ? history[history.length - 1] : null;
     domains.push({
-      domain: d, name: domainNames[d], questionCount: qs.length,
+      domain: domainNum, name: domainInfo.name, questionCount: qs.length,
       lastScore: lastAttempt ? lastAttempt.percentage : null,
       attempts: history.length
     });
@@ -753,9 +983,10 @@ app.get('/api/assessments/domains', (req, res) => {
   res.json(domains);
 });
 
-app.get('/api/assessments/domain/:num', (req, res) => {
+app.get('/api/programs/:programId/assessments/domain/:num', requireProgram, (req, res) => {
   const d = parseInt(req.params.num);
-  const questions = contentCache.assessments[d];
+  const cache = req.programCache;
+  const questions = cache.assessments[d];
   if (!questions) return res.status(404).json({ error: 'Domain not found' });
   const safe = questions.map(q => ({
     num: q.num, scenario: q.scenario, options: q.options, taskStatement: q.taskStatement
@@ -763,8 +994,9 @@ app.get('/api/assessments/domain/:num', (req, res) => {
   res.json({ domain: d, questions: safe });
 });
 
-app.get('/api/assessments/scenarios', (req, res) => {
-  const safe = contentCache.scenarios.map(s => ({
+app.get('/api/programs/:programId/assessments/scenarios', requireProgram, (req, res) => {
+  const cache = req.programCache;
+  const safe = cache.scenarios.map(s => ({
     num: s.num, name: s.name, context: s.context, domains: s.domains,
     questionCount: s.questions.length,
     questions: s.questions.map(q => ({
@@ -774,8 +1006,9 @@ app.get('/api/assessments/scenarios', (req, res) => {
   res.json(safe);
 });
 
-app.get('/api/assessments/exam-simulation', (req, res) => {
-  const shuffled = [...contentCache.scenarios].sort(() => Math.random() - 0.5);
+app.get('/api/programs/:programId/assessments/exam-simulation', requireProgram, (req, res) => {
+  const cache = req.programCache;
+  const shuffled = [...cache.scenarios].sort(() => Math.random() - 0.5);
   const selected = shuffled.slice(0, 4);
   const safe = selected.map(s => ({
     num: s.num, name: s.name, context: s.context, domains: s.domains,
@@ -786,17 +1019,18 @@ app.get('/api/assessments/exam-simulation', (req, res) => {
   res.json(safe);
 });
 
-app.post('/api/assessments/submit', (req, res) => {
+app.post('/api/programs/:programId/assessments/submit', requireProgram, (req, res) => {
   const { type, domain, scenarioNums, answers, timeSpentSeconds } = req.body;
+  const cache = req.programCache;
   let correctAnswers = [];
   if (type === 'domain') {
-    correctAnswers = (contentCache.assessments[domain] || []).map(q => ({
+    correctAnswers = (cache.assessments[domain] || []).map(q => ({
       questionNum: q.num, correct: q.answer, explanation: q.explanation, taskStatement: q.taskStatement
     }));
   } else if (type === 'scenario' || type === 'exam-simulation') {
     const nums = scenarioNums || [];
     for (const sn of nums) {
-      const scenario = contentCache.scenarios.find(s => s.num === sn);
+      const scenario = cache.scenarios.find(s => s.num === sn);
       if (scenario) {
         for (const q of scenario.questions) {
           correctAnswers.push({
@@ -825,34 +1059,59 @@ app.post('/api/assessments/submit', (req, res) => {
     date: new Date().toISOString(), score, total, percentage,
     answers: results, timeSpentSeconds: timeSpentSeconds || 0
   };
-  req.stores.quizHistory.add(record);
-  recordActivity(req.stores);
+  req.programStores.quizHistory.add(record);
+  recordActivity(req.programStores);
   res.json(record);
 });
 
-// ─── API: Quiz History ──────────────────────────────────────────────────────
-
-app.get('/api/quiz-history', (req, res) => {
-  res.json(req.stores.quizHistory.getAll());
+// Quiz History
+app.get('/api/programs/:programId/quiz-history', requireProgram, (req, res) => {
+  res.json(req.programStores.quizHistory.getAll());
 });
 
-// ─── API: Glossary ──────────────────────────────────────────────────────────
-
-app.get('/api/glossary', (req, res) => {
-  res.json(contentCache.glossary);
+// Glossary
+app.get('/api/programs/:programId/glossary', requireProgram, (req, res) => {
+  res.json(req.programCache.glossary);
 });
 
-// ─── API: Study Plan ────────────────────────────────────────────────────────
+// Study Plan
+app.get('/api/programs/:programId/study-plan', requireProgram, (req, res) => {
+  const stores = req.programStores;
+  const manifest = req.programManifest;
+  const progress = stores.progress.get();
+  const defaultProg = buildDefaultProgress(manifest);
+  const studyPlan = progress.studyPlan || defaultProg.studyPlan;
 
-app.get('/api/study-plan', (req, res) => {
-  const progress = req.stores.progress.get();
-  res.json(progress.studyPlan || defaultProgress.studyPlan);
+  // Attach phase metadata from manifest
+  const phases = [];
+  if (manifest.studyPlan && manifest.studyPlan.phases) {
+    for (const phase of manifest.studyPlan.phases) {
+      const checkpoint = studyPlan.checkpoints[phase.id] || { items: phase.items.map(i => i.id), completed: [] };
+      phases.push({
+        id: phase.id,
+        name: phase.name,
+        description: phase.description || '',
+        milestone: phase.milestone || '',
+        items: phase.items,
+        completed: checkpoint.completed
+      });
+    }
+  }
+
+  res.json({
+    currentPhase: studyPlan.currentPhase || 1,
+    checkpoints: studyPlan.checkpoints,
+    phases
+  });
 });
 
-app.put('/api/study-plan', (req, res) => {
+app.put('/api/programs/:programId/study-plan', requireProgram, (req, res) => {
   const { phase, itemId, completed } = req.body;
-  const progress = req.stores.progress.get();
-  if (!progress.studyPlan) progress.studyPlan = JSON.parse(JSON.stringify(defaultProgress.studyPlan));
+  const stores = req.programStores;
+  const manifest = req.programManifest;
+  const progress = stores.progress.get();
+  const defaultProg = buildDefaultProgress(manifest);
+  if (!progress.studyPlan) progress.studyPlan = JSON.parse(JSON.stringify(defaultProg.studyPlan));
   const phaseKey = `phase-${phase}`;
   const cp = progress.studyPlan.checkpoints[phaseKey];
   if (!cp) return res.status(400).json({ error: 'Invalid phase' });
@@ -869,25 +1128,27 @@ app.put('/api/study-plan', (req, res) => {
       break;
     }
   }
-  req.stores.progress.set(progress);
-  recordActivity(req.stores);
+  stores.progress.set(progress);
+  recordActivity(stores);
   res.json(progress.studyPlan);
 });
 
-// ─── API: Exercises ─────────────────────────────────────────────────────────
-
-app.get('/api/exercises', (req, res) => {
-  const progress = req.stores.progress.get();
-  const exercises = contentCache.exercises.map(ex => ({
+// Exercises
+app.get('/api/programs/:programId/exercises', requireProgram, (req, res) => {
+  const stores = req.programStores;
+  const cache = req.programCache;
+  const progress = stores.progress.get();
+  const exercises = cache.exercises.map(ex => ({
     ...ex,
     completedCriteria: (progress.exercises?.[`exercise-${ex.num}`]?.completed) || []
   }));
   res.json(exercises);
 });
 
-app.put('/api/exercises/:num/checklist', (req, res) => {
+app.put('/api/programs/:programId/exercises/:num/checklist', requireProgram, (req, res) => {
   const { criteriaId, completed } = req.body;
-  const progress = req.stores.progress.get();
+  const stores = req.programStores;
+  const progress = stores.progress.get();
   if (!progress.exercises) progress.exercises = {};
   const key = `exercise-${req.params.num}`;
   if (!progress.exercises[key]) progress.exercises[key] = { completed: [] };
@@ -897,28 +1158,27 @@ app.put('/api/exercises/:num/checklist', (req, res) => {
   } else if (!completed) {
     ex.completed = ex.completed.filter(c => c !== criteriaId);
   }
-  req.stores.progress.set(progress);
-  recordActivity(req.stores);
+  stores.progress.set(progress);
+  recordActivity(stores);
   res.json(ex);
 });
 
-// ─── API: Notes ─────────────────────────────────────────────────────────────
-
-app.get('/api/notes', (req, res) => {
+// Notes
+app.get('/api/programs/:programId/notes', requireProgram, (req, res) => {
   const { targetId } = req.query;
   if (targetId) {
-    res.json(req.stores.notes.query(n => n.targetId === targetId));
+    res.json(req.programStores.notes.query(n => n.targetId === targetId));
   } else {
-    res.json(req.stores.notes.getAll());
+    res.json(req.programStores.notes.getAll());
   }
 });
 
-app.post('/api/notes', (req, res) => {
+app.post('/api/programs/:programId/notes', requireProgram, (req, res) => {
   const { targetId, sectionId, content } = req.body;
   if (!content || typeof content !== 'string' || content.trim().length === 0) {
     return res.status(400).json({ error: 'Content required' });
   }
-  const note = req.stores.notes.add({
+  const note = req.programStores.notes.add({
     targetId: (targetId || '').slice(0, 200),
     sectionId: (sectionId || '').slice(0, 200),
     content: content.slice(0, 10000),
@@ -928,25 +1188,36 @@ app.post('/api/notes', (req, res) => {
   res.json(note);
 });
 
-app.put('/api/notes/:id', (req, res) => {
-  const note = req.stores.notes.update(req.params.id, {
+app.put('/api/programs/:programId/notes/:id', requireProgram, (req, res) => {
+  const note = req.programStores.notes.update(req.params.id, {
     ...req.body, updated: new Date().toISOString()
   });
   if (!note) return res.status(404).json({ error: 'Not found' });
   res.json(note);
 });
 
-app.delete('/api/notes/:id', (req, res) => {
-  req.stores.notes.remove(req.params.id);
+app.delete('/api/programs/:programId/notes/:id', requireProgram, (req, res) => {
+  req.programStores.notes.remove(req.params.id);
   res.json({ ok: true });
 });
 
 // ─── Start server ───────────────────────────────────────────────────────────
 
-loadContent();
+discoverPrograms();
+loadAllProgramContent();
+migrateUserData();
 
 app.listen(PORT, () => {
-  console.log(`Claude University running at http://localhost:${PORT}`);
+  const programList = Object.entries(programManifests)
+    .map(([id, m]) => `    - ${m.name} (${id})`)
+    .join('\n');
+  console.log(`PlanetCorps AI Academy running at http://localhost:${PORT}`);
   console.log(`  Dashboard: http://localhost:${PORT}`);
-  console.log(`  Stats API: http://localhost:${PORT}/api/stats\n`);
+  console.log(`  Stats API: http://localhost:${PORT}/api/stats`);
+  if (programList) {
+    console.log(`  Programs:\n${programList}`);
+  } else {
+    console.log('  No programs discovered.');
+  }
+  console.log('');
 });

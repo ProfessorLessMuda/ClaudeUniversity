@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>PlanetCorps · Claude University</title>
+<title>PlanetCorps AI Academy</title>
 <link rel="icon" href="/logo.svg">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -49,6 +49,9 @@ a:hover{text-decoration:underline}
 .vdiv{width:1px;height:28px;background:var(--border);flex-shrink:0}
 #nav{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}
 #nav::-webkit-scrollbar{display:none}
+.breadcrumb{font-size:0.85rem;color:var(--muted);display:flex;align-items:center;flex-shrink:0}
+.breadcrumb a{color:var(--primary);text-decoration:none;font-weight:500}
+.breadcrumb a:hover{text-decoration:underline}
 
 /* ── Tabs ── */
 .tab{padding:8px 14px;font-size:0.85rem;font-weight:600;color:var(--muted);border-radius:8px 8px 0 0;border-bottom:2px solid transparent;transition:color .2s var(--ease),border-color .2s var(--ease);white-space:nowrap}
@@ -79,6 +82,12 @@ a:hover{text-decoration:underline}
 .card{background:var(--surface);border-radius:12px;padding:24px;border:1px solid var(--border);box-shadow:0 2px 8px rgba(0,0,0,0.04);transition:transform .2s var(--ease),box-shadow .2s var(--ease)}
 .card:hover{transform:translateY(-2px);box-shadow:0 4px 16px rgba(0,0,0,0.08)}
 .card-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.program-card{background:var(--surface);border-radius:12px;padding:32px;border:1px solid var(--border);box-shadow:0 2px 8px rgba(0,0,0,0.04);transition:transform .2s var(--ease),box-shadow .2s var(--ease);cursor:pointer}
+.program-card:hover{transform:translateY(-3px);box-shadow:0 8px 24px rgba(0,0,0,0.1)}
+.program-card .program-icon{font-size:2.5rem;margin-bottom:12px}
+.program-card .program-name{font-size:1.2rem;font-weight:700;color:var(--text);margin-bottom:8px}
+.program-card .program-desc{color:var(--muted);font-size:0.9rem;line-height:1.6;margin-bottom:16px}
+.program-card .program-meta{display:flex;align-items:center;gap:16px;font-size:0.85rem;color:var(--muted)}
 
 /* ── Quiz ── */
 .quiz-container{max-width:720px;margin:0 auto}
@@ -321,7 +330,7 @@ a:hover{text-decoration:underline}
     <div class="brand">
       <img src="/logo.svg" alt="PlanetCorps" class="brand-logo">
       <div>
-        <div class="brand-name"><span class="green">Planet</span>Corps &middot; Claude University</div>
+        <div class="brand-name"><span class="green">Planet</span>Corps AI Academy</div>
         <div class="brand-sub">sustain your improvements</div>
       </div>
     </div>
@@ -374,12 +383,13 @@ a:hover{text-decoration:underline}
     <div class="brand">
       <img src="/logo.svg" alt="PlanetCorps" class="brand-logo">
       <div>
-        <div class="brand-name"><span class="green">Planet</span>Corps &middot; Claude University</div>
+        <div class="brand-name"><span class="green">Planet</span>Corps AI Academy</div>
         <div class="brand-sub">sustain your improvements</div>
       </div>
     </div>
     <div class="vdiv"></div>
-    <nav id="nav">
+    <div id="breadcrumb" class="breadcrumb"></div>
+    <nav id="program-tabs" style="display:none">
       <button class="tab active" data-view="dashboard">Dashboard</button>
       <button class="tab" data-view="programs">Programs</button>
       <button class="tab" data-view="curriculum">Curriculum</button>
@@ -399,8 +409,16 @@ a:hover{text-decoration:underline}
 <div class="main" id="app-main" style="display:none">
   <div class="shell">
 
+    <!-- Academy -->
+    <div class="view active" id="view-academy">
+      <div class="loading loading-block lg mb-16"></div>
+      <div class="card-grid">
+        <div class="loading loading-card" style="height:200px"></div>
+      </div>
+    </div>
+
     <!-- Dashboard -->
-    <div class="view active" id="view-dashboard">
+    <div class="view" id="view-dashboard">
       <div class="loading loading-block lg mb-16"></div>
       <div class="stat-grid mb-24">
         <div class="loading loading-card"></div>
@@ -487,7 +505,7 @@ a:hover{text-decoration:underline}
 
 <!-- Footer (hidden until authenticated) -->
 <div class="footer" id="app-footer" style="display:none">
-  <strong>PlanetCorps</strong> &middot; Claude University
+  <strong>PlanetCorps</strong> AI Academy &middot; Running on port 3009
 </div>
 
 <script src="/app.js"></script>
