@@ -40,21 +40,20 @@ a:hover{text-decoration:underline}
 
 /* ── Header ── */
 .header{position:fixed;top:0;left:0;right:0;z-index:100;background:rgba(255,255,255,0.92);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--border);box-shadow:0 1px 4px rgba(0,0,0,0.04)}
-.header .shell{display:flex;align-items:center;gap:20px;height:64px}
+.header .shell{display:flex;align-items:center;gap:20px;height:auto;min-height:64px;flex-wrap:wrap;padding-top:8px;padding-bottom:8px}
 .brand{display:flex;align-items:center;gap:12px;flex-shrink:0}
 .brand-logo{width:36px;height:36px}
 .brand-name{font-weight:700;font-size:1.05rem;letter-spacing:-0.01em;color:var(--text)}
 .brand-name .green{color:var(--primary)}
 .brand-sub{font-size:0.7rem;color:var(--muted);font-weight:500;letter-spacing:0.03em}
 .vdiv{width:1px;height:28px;background:var(--border);flex-shrink:0}
-#nav{display:flex;gap:4px;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none}
-#nav::-webkit-scrollbar{display:none}
+#nav{display:flex;gap:4px;flex-wrap:wrap}
 .breadcrumb{font-size:0.85rem;color:var(--muted);display:flex;align-items:center;flex-shrink:0}
 .breadcrumb a{color:var(--primary);text-decoration:none;font-weight:500}
 .breadcrumb a:hover{text-decoration:underline}
 
 /* ── Tabs ── */
-.tab{padding:8px 14px;font-size:0.85rem;font-weight:600;color:var(--muted);border-radius:8px 8px 0 0;border-bottom:2px solid transparent;transition:color .2s var(--ease),border-color .2s var(--ease);white-space:nowrap}
+.tab{padding:6px 12px;font-size:0.82rem;font-weight:600;color:var(--muted);border-radius:8px 8px 0 0;border-bottom:2px solid transparent;transition:color .2s var(--ease),border-color .2s var(--ease);white-space:nowrap}
 .tab:hover{color:var(--text)}
 .tab.active{color:var(--primary);border-bottom-color:var(--primary)}
 
@@ -302,6 +301,10 @@ a:hover{text-decoration:underline}
 ::-webkit-scrollbar-thumb:hover{background:#c0c0c0}
 
 /* ── Responsive ── */
+@media(max-width:1024px){
+  .tab{padding:6px 10px;font-size:0.8rem}
+  .header .shell{gap:12px}
+}
 @media(max-width:768px){
   .header .shell{flex-wrap:wrap;height:auto;padding-top:12px;padding-bottom:8px;gap:8px}
   .vdiv{display:none}
@@ -330,7 +333,7 @@ a:hover{text-decoration:underline}
     <div class="brand">
       <img src="/logo.svg" alt="PlanetCorps" class="brand-logo">
       <div>
-        <div class="brand-name"><span class="green">Planet</span>Corps AI Academy</div>
+        <div class="brand-name"><span class="green">Planet</span>Corps AI Academy&trade;</div>
         <div class="brand-sub">sustain your improvements</div>
       </div>
     </div>
@@ -375,6 +378,7 @@ a:hover{text-decoration:underline}
       <div class="auth-toggle">Already have an account? <a id="show-login">Sign in</a></div>
     </div>
   </div>
+  <div style="text-align:center;font-size:0.75rem;color:#999;margin-top:16px">&copy; 2026 PlanetCorps AI Academy&trade;</div>
 </div>
 
 <!-- Header (hidden until authenticated) -->
@@ -383,7 +387,7 @@ a:hover{text-decoration:underline}
     <div class="brand">
       <img src="/logo.svg" alt="PlanetCorps" class="brand-logo">
       <div>
-        <div class="brand-name"><span class="green">Planet</span>Corps AI Academy</div>
+        <div class="brand-name"><span class="green">Planet</span>Corps AI Academy&trade;</div>
         <div class="brand-sub">sustain your improvements</div>
       </div>
     </div>
@@ -505,7 +509,7 @@ a:hover{text-decoration:underline}
 
 <!-- Footer (hidden until authenticated) -->
 <div class="footer" id="app-footer" style="display:none">
-  <strong>PlanetCorps</strong> AI Academy &middot; Running on port 3009
+  &copy; 2026 <strong>PlanetCorps</strong> AI Academy&trade; &middot; All rights reserved.
 </div>
 
 <script src="/app.js"></script>
